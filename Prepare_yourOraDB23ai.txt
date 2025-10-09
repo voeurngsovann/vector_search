@@ -1,0 +1,101 @@
+AI Vector Search in Oracle Database 23ai
+1.
+mkdir -p /u01/models
+cd /u01/models
+
+wget https://adwc4pm.objectstorage.us-ashburn-1.oci.customer-oci.com/p/VBRD9P8ZFWkKvnfhrWxkpPe8K03-JIoM5h_8EJyJcpE80c108fuUjg7R5L5O7mMZ/n/adwc4pm/b/OML-Resources/o/all_MiniLM_L12_v2_augmented.zip
+
+unzip -oq all_MiniLM_L12_v2_augmented.zip
+
+2.connect to your PDB
+
+create user if not exists dev identified by Welcome1 quota unlimited on users;
+grant create session, db_developer_role, create mining model to testuser1;
+
+create or replace directory model_dir as '/u01/models';
+grant read, write on directory model_dir to dev;
+
+3.load the model into the database using the DBMS_VECTOR package.
+
+begin
+  dbms_vector.drop_onnx_model (
+    model_name => 'ALL_MINILM_L12_V2',
+    force => true);
+
+  dbms_vector.load_onnx_model (
+    directory  => 'model_dir',
+    file_name  => 'all_MiniLM_L12_v2.onnx',
+    model_name => 'ALL_MINILM_L12_V2');
+end;
+/
+
+3.see the model information in the USER_MINING_MODELS view.
+
+column model_name format a30
+column algorithm format a10
+column mining_function format a15
+
+select model_name, algorithm, mining_function
+from   user_mining_models
+where  model_name = 'ALL_MINILM_L12_V2';
+
+MODEL_NAME                     ALGORITHM  MINING_FUNCTION
+------------------------------ ---------- ---------------
+ALL_MINILM_L12_V2              ONNX       EMBEDDING
+
+SQL>
+
+4. Download CSV file of movie quotes.  
+
+cd /u01/model
+wget https://huggingface.co/datasets/ygorgeurts/movie-quotes/resolve/main/movie_quotes.csv?download=true -O movie_quotes.csv
+
+5. connect as dev user in your PDB 
+sql>
+
+drop table if exists movie_quotes purge;
+
+create table movie_quotes as
+select movie_quote, movie, movie_type, movie_year
+from   external (
+         (
+           movie_quote  varchar2(400),
+           movie        varchar2(200),
+           movie_type   varchar2(50),
+           movie_year   number(4)
+         )
+         type oracle_loader
+         default directory model_dir
+         access parameters (
+           records delimited by newline
+           skip 1
+           badfile model_dir
+           logfile model_dir:'moview_quotes_ext_tab_%a_%p.log'
+           discardfile model_dir
+           fields csv with embedded terminated by ',' optionally enclosed by '"'
+           missing field values are null
+           (
+             movie_quote char(400),
+             movie,
+             movie_type,
+             movie_year
+           )
+        )
+        location ('movie_quotes.csv')
+        reject limit unlimited
+      );
+
+6.add a new column to hold the vector data for each movie quote. using the new VECTOR data type.
+
+alter table movie_quotes add (
+  movie_quote_vector vector
+);
+
+
+7.populate the new column by generating vectors from the movie quotes.
+
+update movie_quotes
+set    movie_quote_vector = vector_embedding(all_minilm_l12_v2 using movie_quote as data);
+
+commit;
+
