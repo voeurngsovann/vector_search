@@ -1,0 +1,93 @@
+1.
+
+SQL> BEGIN
+   EXECUTE IMMEDIATE 'DROP TABLE MEDICAL_QA_DATA PURGE';
+EXCEPTION
+   WHEN OTHERS THEN
+      IF SQLCODE != -942 THEN
+         RAISE;
+      END IF;
+END;
+/
+
+CREATE TABLE medical_qa_data (
+    id          NUMBER GENERATED ALWAYS AS IDENTITY,
+    doc_json    JSON,
+    doc_vector  VECTOR(384, FLOAT32)
+);
+  2    3    4    5    6    7    8    9
+PL/SQL procedure successfully completed.
+
+SQL> SQL>   2    3    4    5
+Table created.
+
+
+
+2.
+SQL> INSERT INTO medical_qa_data (doc_json, doc_vector)
+  2  SELECT
+  3      doc_json,
+  4      VECTOR_EMBEDDING(
+  5          ALL_MINILM_L12_V2 USING  -- Corrected line: removed single quotes
+  6          JSON_VALUE(doc_json, '$.instruction' RETURNING VARCHAR2(4000)) || ' ' ||
+        JSON_VALUE(doc_json, '$.output' RETURNING VARCHAR2(4000)) AS data
+  7    8      )
+FROM JSON_TABLE(
+  9   10      (SELECT BFILENAME('MODEL_DIR', 'medical_o1_sft.json') FROM DUAL),
+ 11      '$[*]'
+ 12      COLUMNS (
+ 13          doc_json JSON PATH '$'
+    )
+ 14   15  );
+
+COMMIT;
+
+
+
+
+
+3.
+WITH search_vector AS (
+  SELECT VECTOR_EMBEDDING(
+    ALL_MINILM_L12_V2 USING 'symptoms of sudden weakness in the left arm and leg' AS data
+  ) AS vec FROM DUAL
+)
+SELECT
+    m.doc_json,
+    L2_DISTANCE(
+        m.doc_vector,
+        v.vec
+    ) AS distance
+FROM
+    medical_qa_data m,
+    search_vector v
+ORDER BY
+    distance
+FETCH FIRST 5 ROWS ONLY;
+
+
+
+
+
+====
+
+
+WITH search_vector AS (
+    SELECT VECTOR_EMBEDDING(
+        ALL_MINILM_L12_V2 USING 'Given the symptoms of sudden weakness in the left arm and leg, recent long-distance travel, and the presence of swollen and tender right lower leg, what specific cardiac abnormality is most likely to be found upon further evaluation that could explain these findings?g' AS data
+    ) AS vec FROM DUAL
+)
+SELECT
+    -- This line is updated to retrieve only the 'Response' field.
+    JSON_VALUE(m.doc_json, '$.Response') AS response_text,
+    L2_DISTANCE(
+        m.doc_vector,
+        v.vec
+    ) AS distance
+FROM
+    medical_qa_data m,
+    search_vector v
+ORDER BY
+    distance
+FETCH FIRST 10 ROWS ONLY;
+
